@@ -10,8 +10,9 @@
 #include <RH_RF95.h>
 
 
-#define MOTION_PIN 3
-#define LED_PIN 10
+#define MOTION_PIN 0
+#define LED1_PIN 12
+#define LED2_PIN 11
 
 /* for feather32u4 */
 #define RFM95_CS 8
@@ -75,17 +76,39 @@
 // Singleton instance of the radio driver
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
-unsigned long flash_on;
+// If set, flashes until the millis() time
+unsigned long flash_saw_motion;
+unsigned long flash_received_motion;
+
+int16_t packetnum = 0;  // packet counter, we increment per xmission
+
 
 void motion_detected()
 {
   Serial.println("Movement Detected");
-  flash_on = millis() + 5 * 1000;
+  flash_saw_motion = millis() + 5 * 1000;
 }
+
+void tx_motion() {
+  char radiopacket[20] = "Motion #           ";
+  itoa(packetnum++, radiopacket+13, 10);
+  Serial.print("Sending "); Serial.println(radiopacket);
+  radiopacket[19] = 0;
+  
+  Serial.println("Sending...");
+  delay(10);
+  rf95.send((uint8_t *)radiopacket, 20);
+
+  Serial.println("Waiting for packet to complete..."); 
+  delay(10);
+  rf95.waitPacketSent();
+}
+
 
 void setup() 
 {
-  flash_on = 0;
+  flash_saw_motion = 0;
+  flash_received_motion = 0;
   
   // Motion Sensor Interrupts
   attachInterrupt( digitalPinToInterrupt( MOTION_PIN ), motion_detected, RISING );
@@ -94,13 +117,9 @@ void setup()
   digitalWrite(RFM95_RST, HIGH);
 
   Serial.begin(115200);
-  while (!Serial) {
-    delay(1);
-  }
-
   delay(100);
 
-  Serial.println("Feather LoRa TX Test!");
+  Serial.println("---=== Feather LoRa Motion Detector  ===---");
 
   // manual reset
   digitalWrite(RFM95_RST, LOW);
@@ -129,65 +148,43 @@ void setup()
   rf95.setTxPower(23, false);
 }
 
-int16_t packetnum = 0;  // packet counter, we increment per xmission
-
-void blink() {
-    digitalWrite( LED_PIN, HIGH );
+void blink(int led) {
+    Serial.println("blink!");
+    digitalWrite( led, HIGH );
     delay(100);
-    digitalWrite( LED_PIN, LOW );
+    digitalWrite( led, LOW );
     delay(100);
 }
 
-void loop()
-{
-  if ( flash_on > millis() ) 
-  {
-    blink();
+void loop() {
+
+  // Blink the LED if flash is set
+  if ( flash_saw_motion > millis() )  {
+    blink(LED1_PIN);
+    tx_motion();
+  }
+  if ( flash_received_motion > millis() )  {
+    blink(LED2_PIN);
   }
 
-}
-
-void loop2()
-{
-  delay(1000); // Wait 1 second between transmits, could also 'sleep' here!
-  Serial.println("Transmitting..."); // Send a message to rf95_server
+  // Check for received messages
+  if ( rf95.available() ) {
+    // Receive Buffer
+    uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
+    uint8_t buflen = sizeof(buf);
   
-  char radiopacket[20] = "Hello World #      ";
-  itoa(packetnum++, radiopacket+13, 10);
-  Serial.print("Sending "); Serial.println(radiopacket);
-  radiopacket[19] = 0;
-  
-  Serial.println("Sending...");
-  delay(10);
-  rf95.send((uint8_t *)radiopacket, 20);
+    if ( rf95.recv(buf, &buflen) ) {
+      Serial.print( "Received Message: " );
+      Serial.println( (char*)buf );
 
-  Serial.println("Waiting for packet to complete..."); 
-  delay(10);
-  rf95.waitPacketSent();
-  // Now wait for a reply
-  uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
-  uint8_t len = sizeof(buf);
-
-  Serial.println("Waiting for reply...");
-  if (rf95.waitAvailableTimeout(1000))
-  { 
-    // Should be a reply message for us now   
-    if (rf95.recv(buf, &len))
-   {
-      Serial.print("Got reply: ");
-      Serial.println((char*)buf);
-      Serial.print("RSSI: ");
-      Serial.println(rf95.lastRssi(), DEC);    
-    }
-    else
-    {
-      Serial.println("Receive failed");
+      if ( flash_received_motion < millis() ) { // If we're not already flashing
+        flash_received_motion = millis() + 10 * 1000; // flash for 10 sec
+      }
+    } else {
+      Serial.println( "Receive Failed" );
     }
   }
-  else
-  {
-    Serial.println("No reply, is there a listener around?");
-  }
 
 }
+
 
